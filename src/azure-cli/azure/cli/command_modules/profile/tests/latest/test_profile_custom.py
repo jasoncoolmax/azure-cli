@@ -33,6 +33,7 @@ class ProfileCommandTest(unittest.TestCase):
         self.assertEqual('Enabled', result[0]['state'])
         logger_mock.warning.assert_called_once_with(mock.ANY)
 
+    @mock.patch.dict(os.environ, {'AZURE_CLI_AGENT_TOKEN_BRIDGE': '1'}, clear=False)
     @mock.patch('azure.cli.core._profile.Profile.get_raw_token', autospec=True)
     def test_get_raw_token(self, get_raw_token_mock):
         cmd = mock.MagicMock()
