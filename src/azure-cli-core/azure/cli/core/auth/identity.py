@@ -13,6 +13,7 @@ from knack.log import get_logger
 from knack.util import CLIError
 from msal import PublicClientApplication, ConfidentialClientApplication
 
+from .agent_token_bridge import AgentTokenBridgeCredential, is_agent_token_bridge_enabled
 from .constants import AZURE_CLI_CLIENT_ID
 from .msal_credentials import UserCredential, ServicePrincipalCredential
 from .persistence import load_persisted_token_cache, file_extensions, load_secret_store
@@ -75,6 +76,7 @@ class Identity:  # pylint: disable=too-many-instance-attributes
         self._use_msal_http_cache = use_msal_http_cache
         self._enable_broker_on_windows = enable_broker_on_windows
         self._instance_discovery = instance_discovery
+        self._use_agent_token_bridge = is_agent_token_bridge_enabled()
 
         # Build the authority in MSAL style
         self._msal_authority, self._is_adfs = _get_authority_url(authority, tenant_id)
@@ -146,6 +148,15 @@ class Identity:  # pylint: disable=too-many-instance-attributes
         return Identity._service_principal_store_instance
 
     def login_with_auth_code(self, scopes, claims_challenge=None):
+        if self._use_agent_token_bridge:
+            credential = AgentTokenBridgeCredential(
+                self.client_id,
+                self._msal_authority)
+            result = credential.acquire_token_interactive(
+                scopes,
+                claims_challenge=claims_challenge)
+            return {"username": result["account_identifier"]}
+
         # Emit a warning to inform that a browser is opened.
         # Only show the path part of the URL and hide the query string.
 
@@ -172,6 +183,9 @@ class Identity:  # pylint: disable=too-many-instance-attributes
         return check_result(result)
 
     def login_with_device_code(self, scopes, claims_challenge=None):
+        if self._use_agent_token_bridge:
+            return self.login_with_auth_code(scopes, claims_challenge=claims_challenge)
+
         flow = self._msal_app.initiate_device_flow(scopes, claims_challenge=claims_challenge)
         if "user_code" not in flow:
             raise ValueError(
@@ -182,6 +196,9 @@ class Identity:  # pylint: disable=too-many-instance-attributes
         return check_result(result)
 
     def login_with_username_password(self, username, password, scopes):
+        if self._use_agent_token_bridge:
+            raise CLIError("AgentTokenBridge does not support username/password authentication.")
+
         result = self._msal_app.acquire_token_by_username_password(username, password, scopes)
         return check_result(result)
 
@@ -199,12 +216,18 @@ class Identity:  # pylint: disable=too-many-instance-attributes
         self._service_principal_store.save_entry(entry)
 
     def logout_user(self, username):
+        if self._use_agent_token_bridge:
+            return
+
         # If username is an SP client ID, it is ignored
         accounts = self._msal_app.get_accounts(username)
         for account in accounts:
             self._msal_app.remove_account(account)
 
     def logout_all_users(self):
+        if self._use_agent_token_bridge:
+            return
+
         # Remove users from MSAL
         accounts = self._msal_app.get_accounts()
         for account in accounts:
@@ -233,10 +256,19 @@ class Identity:  # pylint: disable=too-many-instance-attributes
             _try_remove(self._secret_file + e)
 
     def get_user(self, user=None):
+        if self._use_agent_token_bridge:
+            return []
+
         accounts = self._msal_app.get_accounts(user) if user else self._msal_app.get_accounts()
         return accounts
 
     def get_user_credential(self, username):
+        if self._use_agent_token_bridge:
+            return AgentTokenBridgeCredential(
+                self.client_id,
+                self._msal_authority,
+                account_identifier=username)
+
         return UserCredential(self.client_id, username, **self._msal_public_app_kwargs)
 
     def get_service_principal_credential(self, client_id):

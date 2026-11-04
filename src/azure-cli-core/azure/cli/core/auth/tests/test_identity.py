@@ -45,6 +45,35 @@ with open(TEST_CERT) as f:
 
 class TestIdentity(unittest.TestCase):
 
+    @mock.patch.dict(os.environ, {"AZURE_CLI_AGENT_TOKEN_BRIDGE": "1"})
+    @mock.patch("azure.cli.core.auth.identity.AgentTokenBridgeCredential")
+    def test_agent_token_bridge_preserves_identity_client_id(self, credential_type_mock):
+        credential = credential_type_mock.return_value
+        credential.acquire_token_interactive.return_value = {
+            "account_identifier": "account-id",
+        }
+
+        identity = Identity(
+            "https://login.microsoftonline.com",
+            tenant_id="tenant1",
+            client_id="caller-selected-client-id")
+        with mock.patch.object(identity, "_load_msal_token_cache") as load_cache_mock:
+            user = identity.login_with_auth_code(["scope/.default"])
+            silent_credential = identity.get_user_credential(user["username"])
+
+        self.assertEqual(user["username"], "account-id")
+        load_cache_mock.assert_not_called()
+        self.assertIs(silent_credential, credential_type_mock.return_value)
+        self.assertEqual(
+            credential_type_mock.call_args_list[0].args,
+            ("caller-selected-client-id", "https://login.microsoftonline.com/tenant1"))
+        self.assertEqual(
+            credential_type_mock.call_args_list[1].args,
+            ("caller-selected-client-id", "https://login.microsoftonline.com/tenant1"))
+        self.assertEqual(
+            credential_type_mock.call_args_list[1].kwargs,
+            {"account_identifier": "account-id"})
+
     @mock.patch("azure.cli.core.auth.identity.ServicePrincipalStore.save_entry")
     @mock.patch("msal.application.ConfidentialClientApplication.acquire_token_for_client")
     @mock.patch("msal.application.ConfidentialClientApplication.__init__", return_value=None)
